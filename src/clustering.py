@@ -1,6 +1,7 @@
 """Semantic clustering using tweet content and bio with sentence embeddings."""
 
 import re
+import os
 from typing import List, Dict, Tuple, Optional
 import numpy as np
 from sklearn.cluster import KMeans
@@ -285,6 +286,206 @@ class SemanticClustering:
         print(f"✓ Clustered {len(mutuals)} users into {len(self.cluster_keywords)} clusters")
         
         return mutuals
+    
+    def generate_cluster_names_with_llm(
+        self,
+        mutuals: List[Dict],
+        tweets_by_user: Dict[str, List[str]],
+        openai_api_key: Optional[str] = None,
+        model: str = "gpt-4o-mini",
+        max_samples_per_cluster: int = 8
+    ) -> Dict[int, Dict]:
+        """Generate cluster names using OpenAI by analyzing sample users from each cluster.
+        
+        Args:
+            mutuals: List of mutual user dictionaries (must have cluster_id assigned)
+            tweets_by_user: Dictionary mapping user_id to list of tweets
+            openai_api_key: OpenAI API key (if None, uses OPENAI_API_KEY env var)
+            model: OpenAI model to use (default: gpt-4o-mini)
+            max_samples_per_cluster: Maximum number of users to sample per cluster
+            
+        Returns:
+            Updated cluster_keywords dictionary with LLM-generated names
+        """
+        # Build cluster_labels dictionary from mutuals
+        cluster_labels: Dict[int, List[int]] = {}
+        for idx, mutual in enumerate(mutuals):
+            cluster_id = mutual.get('cluster_id')
+            if cluster_id is not None:
+                if cluster_id not in cluster_labels:
+                    cluster_labels[cluster_id] = []
+                cluster_labels[cluster_id].append(idx)
+        # Try to get API key
+        api_key = openai_api_key or os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            print("⚠ No OpenAI API key found. Falling back to TF-IDF naming.")
+            return self.cluster_keywords
+        
+        try:
+            from openai import OpenAI
+        except ImportError:
+            print("⚠ openai package not installed. Install with: pip install openai")
+            print("  Falling back to TF-IDF naming.")
+            return self.cluster_keywords
+        
+        client = OpenAI(api_key=api_key)
+        
+        print(f"Generating cluster names with {model}...")
+        
+        updated_keywords = self.cluster_keywords.copy()
+        
+        for cluster_id, user_indices in cluster_labels.items():
+            if cluster_id == -1:  # Skip noise cluster
+                continue
+            
+            if not user_indices:
+                continue
+            
+            # Sample users from this cluster (prioritize those with more content)
+            sampled_indices = self._sample_cluster_users(
+                mutuals, 
+                tweets_by_user, 
+                user_indices, 
+                max_samples_per_cluster
+            )
+            
+            if not sampled_indices:
+                continue
+            
+            # Build prompt with sample users
+            prompt = self._build_cluster_naming_prompt(
+                mutuals, 
+                tweets_by_user, 
+                sampled_indices
+            )
+            
+            try:
+                # Call OpenAI API
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are a helpful assistant that generates concise, descriptive names for groups of Twitter users based on their bios and tweets. Respond with only the cluster name (2-4 words), no explanation."
+                        },
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ],
+                    temperature=0.3,
+                    max_tokens=20
+                )
+                
+                cluster_name = response.choices[0].message.content.strip()
+                # Clean up the response (remove quotes if present, limit length)
+                cluster_name = cluster_name.strip('"\'')
+                if len(cluster_name) > 50:
+                    cluster_name = cluster_name[:47] + "..."
+                
+                # Update cluster keywords
+                if cluster_id in updated_keywords:
+                    updated_keywords[cluster_id]['name'] = cluster_name
+                else:
+                    updated_keywords[cluster_id] = {
+                        'name': cluster_name,
+                        'keywords': []
+                    }
+                
+                print(f"  Cluster {cluster_id}: {cluster_name}")
+                
+            except Exception as e:
+                print(f"  ⚠ Error generating name for cluster {cluster_id}: {e}")
+                print(f"    Falling back to TF-IDF name: {updated_keywords.get(cluster_id, {}).get('name', f'Cluster {cluster_id + 1}')}")
+                continue
+        
+        print("✓ Cluster names generated")
+        
+        # Update cluster_keywords
+        self.cluster_keywords = updated_keywords
+        
+        # Update cluster names in mutuals
+        for mutual in mutuals:
+            cluster_id = mutual.get('cluster_id')
+            if cluster_id is not None and cluster_id in updated_keywords:
+                mutual['cluster_name'] = updated_keywords[cluster_id]['name']
+        
+        return updated_keywords
+    
+    def _sample_cluster_users(
+        self,
+        mutuals: List[Dict],
+        tweets_by_user: Dict[str, List[str]],
+        user_indices: List[int],
+        max_samples: int
+    ) -> List[int]:
+        """Sample users from a cluster, prioritizing those with more content."""
+        # Score users by content richness (bio length + tweet count)
+        scored_users = []
+        for idx in user_indices:
+            if idx >= len(mutuals):
+                continue
+            mutual = mutuals[idx]
+            user_id = mutual['user_id']
+            tweets = tweets_by_user.get(user_id, [])
+            
+            bio_length = len(mutual.get('description', '') or '')
+            tweet_count = len(tweets)
+            content_score = bio_length + (tweet_count * 50)  # Weight tweets more
+            
+            scored_users.append((idx, content_score))
+        
+        # Sort by score descending and take top N
+        scored_users.sort(key=lambda x: x[1], reverse=True)
+        sampled = [idx for idx, _ in scored_users[:max_samples]]
+        
+        return sampled
+    
+    def _build_cluster_naming_prompt(
+        self,
+        mutuals: List[Dict],
+        tweets_by_user: Dict[str, List[str]],
+        user_indices: List[int]
+    ) -> str:
+        """Build a prompt for OpenAI to generate a cluster name."""
+        prompt_parts = [
+            "Given these Twitter users who form a cluster, generate a 2-4 word descriptive name:",
+            ""
+        ]
+        
+        for idx in user_indices:
+            if idx >= len(mutuals):
+                continue
+            
+            mutual = mutuals[idx]
+            user_id = mutual['user_id']
+            screen_name = mutual.get('screen_name', user_id)
+            bio = mutual.get('description', '') or ''
+            tweets = tweets_by_user.get(user_id, [])
+            
+            # Take 2-3 most representative tweets (first few, skipping RTs)
+            sample_tweets = []
+            for tweet in tweets[:5]:  # Check first 5 tweets
+                if tweet and not tweet.strip().startswith('RT @'):
+                    cleaned = self.preprocess_text(tweet)
+                    if cleaned and len(cleaned) > 10:
+                        sample_tweets.append(cleaned)
+                        if len(sample_tweets) >= 3:
+                            break
+            
+            user_info = f"User (@{screen_name}):"
+            if bio:
+                user_info += f'\nBio: "{bio}"'
+            if sample_tweets:
+                tweet_text = ' | '.join([f'"{t}"' for t in sample_tweets])
+                user_info += f'\nTweets: {tweet_text}'
+            
+            prompt_parts.append(user_info)
+            prompt_parts.append("")
+        
+        prompt_parts.append("Respond with just the cluster name, no explanation.")
+        
+        return '\n'.join(prompt_parts)
     
     def get_cluster_info(self) -> Dict[int, Dict]:
         """Get cluster information including keywords."""

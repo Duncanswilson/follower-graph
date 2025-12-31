@@ -20,6 +20,7 @@ httpx.AsyncClient.__init__ = _patched_async_client_init
 import asyncio
 import argparse
 import getpass
+import os
 import sys
 import webbrowser
 from pathlib import Path
@@ -112,6 +113,16 @@ async def main():
         action='store_true',
         help='Disable adaptive rate limiting (use fixed delay instead)'
     )
+    parser.add_argument(
+        '--openai-key',
+        type=str,
+        help='OpenAI API key (or set OPENAI_API_KEY environment variable)'
+    )
+    parser.add_argument(
+        '--no-llm-naming',
+        action='store_true',
+        help='Disable LLM-powered cluster naming (use TF-IDF keywords instead)'
+    )
     
     args = parser.parse_args()
     
@@ -193,6 +204,24 @@ async def main():
             n_clusters=args.clusters,
             auto_detect=auto_detect
         )
+        
+        # Generate LLM-powered cluster names if enabled
+        if not args.no_llm_naming:
+            try:
+                print()
+                openai_key = args.openai_key or os.getenv('OPENAI_API_KEY')
+                if openai_key:
+                    clustering.generate_cluster_names_with_llm(
+                        mutuals,
+                        tweets_by_user,
+                        openai_api_key=openai_key
+                    )
+                else:
+                    print("⚠ No OpenAI API key provided. Using TF-IDF cluster names.")
+                    print("  Set OPENAI_API_KEY env var or use --openai-key to enable LLM naming.")
+            except Exception as e:
+                print(f"⚠ Error generating LLM cluster names: {e}")
+                print("  Falling back to TF-IDF cluster names.")
         
         cluster_info = clustering.get_cluster_info()
         print(f"\nCluster distribution:")
