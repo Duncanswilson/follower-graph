@@ -1,7 +1,7 @@
 """NetworkX graph construction for ego network."""
 
 import networkx as nx
-from typing import List, Dict
+from typing import List, Dict, Tuple
 
 
 class EgoNetworkBuilder:
@@ -75,6 +75,29 @@ class EgoNetworkBuilder:
         print(f"✓ Built ego network: {self.graph.number_of_nodes()} nodes, {self.graph.number_of_edges()} edges")
         
         return self.graph
+    
+    def add_mutual_edges(self, edges: List[Tuple[str, str]]) -> None:
+        """Add edges between mutuals who follow each other.
+        
+        Args:
+            edges: List of (source_user_id, target_user_id) tuples
+        """
+        added_count = 0
+        skipped_count = 0
+        
+        for source, target in edges:
+            if source in self.graph and target in self.graph:
+                # Check if edge already exists (avoid duplicates)
+                if not self.graph.has_edge(source, target):
+                    self.graph.add_edge(source, target)
+                    added_count += 1
+            else:
+                skipped_count += 1
+        
+        if added_count > 0:
+            print(f"✓ Added {added_count} mutual-to-mutual edges")
+        if skipped_count > 0:
+            print(f"  ({skipped_count} edges skipped - nodes not in graph)")
     
     def get_cluster_distribution(self) -> Dict[int, int]:
         """Get distribution of nodes across clusters."""

@@ -27,7 +27,7 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 from threading import Thread
 
 from src.collector import TwitterCollector
-from src.clustering import BioClustering
+from src.clustering import SemanticClustering
 from src.network import EgoNetworkBuilder
 from src.visualize import NetworkVisualizer
 
@@ -91,6 +91,27 @@ async def main():
         action='store_true',
         help='Start HTTP server to view visualization (opens browser automatically)'
     )
+    parser.add_argument(
+        '--mutual-edges',
+        action='store_true',
+        help='Collect mutual-to-mutual connections (enriches graph but takes longer)'
+    )
+    parser.add_argument(
+        '--mutual-edges-sample',
+        type=int,
+        help='Limit mutual edge collection to top N users by followers (reduces API calls)'
+    )
+    parser.add_argument(
+        '--mutual-edges-delay',
+        type=float,
+        default=2.0,
+        help='Delay in seconds between API calls for mutual edges (default: 2.0, increase if hitting rate limits)'
+    )
+    parser.add_argument(
+        '--no-adaptive-rate-limit',
+        action='store_true',
+        help='Disable adaptive rate limiting (use fixed delay instead)'
+    )
     
     args = parser.parse_args()
     
@@ -143,10 +164,24 @@ async def main():
         print(f"Error collecting mutuals: {e}")
         sys.exit(1)
     
-    # Cluster mutuals
+    # Fetch tweets for semantic clustering
     try:
         print()
-        clustering = BioClustering(
+        tweets_by_user = await collector.fetch_tweets_for_mutuals(
+            mutuals,
+            tweets_per_user=20,
+            use_cache=not args.no_cache,
+            rate_limit_delay=0.5
+        )
+    except Exception as e:
+        print(f"Warning: Error fetching tweets: {e}")
+        print("Falling back to bio-only clustering...")
+        tweets_by_user = {}
+    
+    # Cluster mutuals using semantic analysis
+    try:
+        print()
+        clustering = SemanticClustering(
             min_clusters=args.min_clusters,
             max_clusters=args.max_clusters
         )
@@ -154,6 +189,7 @@ async def main():
         auto_detect = args.auto_clusters or args.clusters is None
         mutuals = clustering.cluster(
             mutuals,
+            tweets_by_user=tweets_by_user,
             n_clusters=args.clusters,
             auto_detect=auto_detect
         )
@@ -169,11 +205,36 @@ async def main():
         traceback.print_exc()
         sys.exit(1)
     
+    # Collect mutual-to-mutual edges (optional)
+    mutual_edges = []
+    if args.mutual_edges:
+        try:
+            print()
+            # Get ego user ID to exclude from mutual edges
+            ego_user_id = await collector.get_user_id(args.username)
+            mutual_edges = await collector.fetch_mutual_connections(
+                mutuals,
+                ego_user_id=ego_user_id,
+                use_cache=not args.no_cache,
+                rate_limit_delay=args.mutual_edges_delay,
+                sample_size=args.mutual_edges_sample,
+                use_adaptive=not args.no_adaptive_rate_limit
+            )
+        except Exception as e:
+            print(f"Warning: Error collecting mutual edges: {e}")
+            print("Continuing without mutual edges...")
+            mutual_edges = []
+    
     # Build network
     try:
         print()
         network_builder = EgoNetworkBuilder(args.username)
         graph = network_builder.build(mutuals)
+        
+        # Add mutual-to-mutual edges if collected
+        if mutual_edges:
+            network_builder.add_mutual_edges(mutual_edges)
+            # Graph is updated in-place, so no need to reassign
     except Exception as e:
         print(f"Error building network: {e}")
         import traceback

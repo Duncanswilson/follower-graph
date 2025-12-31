@@ -286,15 +286,24 @@
         let zoom = null;
         let selectedNode = null;
 
+        // Graph data embedded at build time
+        const EMBEDDED_GRAPH_DATA = /* GRAPH_DATA_PLACEHOLDER */ null;
+
         // Load graph data
         async function loadGraph() {
             try {
-                const response = await fetch('graph.json');
-                graphData = await response.json();
-                initializeVisualization();
+                // Use embedded data if available, otherwise try to fetch
+                if (EMBEDDED_GRAPH_DATA) {
+                    graphData = EMBEDDED_GRAPH_DATA;
+                    initializeVisualization();
+                } else {
+                    const response = await fetch('graph.json');
+                    graphData = await response.json();
+                    initializeVisualization();
+                }
             } catch (error) {
                 console.error('Error loading graph data:', error);
-                document.body.innerHTML = '<div style="color: white; padding: 20px;">Error loading graph data. Make sure graph.json is in the same directory.</div>';
+                document.body.innerHTML = '<div style="color: white; padding: 20px;">Error loading graph data. Make sure graph.json is in the same directory, or run a local server.</div>';
             }
         }
 
@@ -316,6 +325,19 @@
                     </div>
                 `;
                 clusterList.appendChild(item);
+            });
+
+            // Calculate cluster centers arranged radially
+            const clusterCenters = {};
+            const numClusters = graphData.clusters.length;
+            const radius = Math.min(width, height) * 0.35;
+            
+            graphData.clusters.forEach((cluster, i) => {
+                const angle = (2 * Math.PI * i) / numClusters;
+                clusterCenters[cluster.id] = {
+                    x: width / 2 + radius * Math.cos(angle),
+                    y: height / 2 + radius * Math.sin(angle)
+                };
             });
 
             // Setup SVG
@@ -341,7 +363,15 @@
                     .strength(-300))
                 .force('center', d3.forceCenter(width / 2, height / 2))
                 .force('collision', d3.forceCollide()
-                    .radius(d => d.size + 2));
+                    .radius(d => d.size + 2))
+                .force('x', d3.forceX().strength(0.15).x(d => {
+                    if (d.isEgo) return width / 2;
+                    return clusterCenters[d.group]?.x || width / 2;
+                }))
+                .force('y', d3.forceY().strength(0.15).y(d => {
+                    if (d.isEgo) return height / 2;
+                    return clusterCenters[d.group]?.y || height / 2;
+                }));
 
             // Create links
             const link = g.append('g')

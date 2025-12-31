@@ -16,20 +16,20 @@ class GraphExporter:
         self.cluster_colors = self._generate_cluster_colors()
     
     def _generate_cluster_colors(self) -> Dict[int, str]:
-        """Generate color mapping for clusters."""
+        """Generate color mapping for clusters with vibrant, saturated colors."""
         colors = [
-            '#FF6B6B',  # Red
-            '#4ECDC4',  # Teal
-            '#45B7D1',  # Blue
-            '#FFA07A',  # Light Salmon
-            '#98D8C8',  # Mint
-            '#F7DC6F',  # Yellow
-            '#BB8FCE',  # Purple
-            '#85C1E2',  # Sky Blue
-            '#F8B88B',  # Peach
-            '#82E0AA',  # Green
-            '#F1948A',  # Pink
-            '#F4D03F',  # Gold
+            '#FFD700',  # Vibrant Yellow
+            '#1E90FF',  # Bright Blue
+            '#FF1493',  # Deep Pink/Red
+            '#00CED1',  # Dark Turquoise/Cyan
+            '#32CD32',  # Lime Green
+            '#9370DB',  # Medium Purple
+            '#FF4500',  # Orange Red
+            '#00BFFF',  # Deep Sky Blue
+            '#FF69B4',  # Hot Pink
+            '#00FA9A',  # Medium Spring Green
+            '#8A2BE2',  # Blue Violet
+            '#FF6347',  # Tomato Red
         ]
         
         color_map = {}
